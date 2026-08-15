@@ -1287,9 +1287,6 @@ final class AppState {
             return
         }
 
-        // New incoming permission request means session needs user decision again.
-        dismissedPermissionSessionIds.remove(sessionId)
-
         // Clear any pending questions for THIS session (mutually exclusive within a session)
         drainQuestions(forSession: sessionId, reason: "newPermissionRequest")
 
@@ -1310,16 +1307,64 @@ final class AppState {
             return
         }
 
+        // A genuinely new request means this session needs a user decision again,
+        // so it stops being dismissed. This must come AFTER the replay-dedup
+        // return above: a replay is the same decision arriving twice, not a new
+        // one, and un-dismissing on a replay resurrects the request the user
+        // hid — which then takes the card the arriving session should have got
+        // and, counting as a burst already in progress, silences its sound too.
+        // (A same-id request with different tool inputs is a distinct request,
+        // not a replay — merge returns false for those, so they still land here.)
+        dismissedPermissionSessionIds.remove(sessionId)
+
+        // Dismissing hides a request but deliberately leaves it queued, so the
+        // CLI stays blocked and the prompt stays recoverable. Gating on
+        // `permissionQueue.count == 1` therefore swallowed every later request —
+        // from any session — for as long as a dismissed one sat in the queue.
+        //
+        // The gate's real question is "is an approval card on screen", so ask
+        // the surface. Queue-derived proxies do not survive the un-dismiss
+        // above: a session's own next request clears its dismissal, which makes
+        // its still-queued earlier request count as visible again while nothing
+        // is displayed — silencing every later request all over again. (#309)
+        //
+        // ponytail: a card suppressed by Smart Suppress also leaves a visible
+        // request undisplayed, so a second session's request still waits behind
+        // it. That is pre-existing (`main` behaves the same) and needs
+        // showNextPending to skip un-openable entries; tracked separately.
+        //
+        // The surface alone is not enough either: `drainPermissions` empties one
+        // SESSION's requests without clearing `surface`, so a card can be left
+        // pointing at a session that has nothing queued. Ask per session, not
+        // per queue — a whole-queue test (`!permissionQueue.isEmpty`) reads as
+        // "a card is up" whenever some other session is still waiting, which
+        // leaves the panel showing a card for a session with no pending request
+        // while later requests queue silently behind it.
+        let approvalCardOnScreen: Bool
+        if case .approvalCard(let shownSessionId) = surface,
+           permissionQueue.contains(where: { ($0.event.sessionId ?? "default") == shownSessionId }) {
+            approvalCardOnScreen = true
+        } else {
+            approvalCardOnScreen = false
+        }
+
+        // Card and sound answer different questions and must not share a gate.
+        // The sound marks the start of a burst of approvals, which is what
+        // `count == 1` used to approximate; within a burst it stays quiet, and
+        // a dismissed request sitting in the queue must not count as a burst
+        // already in progress.
+        let burstAlreadyInProgress = nextVisiblePermissionIndex() != nil
         permissionQueue.append(request)
 
-        // Show UI only if this is the first (or only) queued item
-        if permissionQueue.count == 1 {
-            activeSessionId = sessionId
-            // If user is already browsing the session list, keep them there and
-            // let inline controls handle approval without stealing focus.
-            if surface != .sessionList, shouldAutoOpenPendingSurface(for: sessionId) {
-                surface = .approvalCard(sessionId: sessionId)
-            }
+        // Show UI only when no approval card is already up to be stolen from.
+        // showNextPending picks the first *visible* request, promotes it to the
+        // head and applies the session-list / Smart Suppress rules — pointing
+        // the card at this session by hand would show the dismissed request's
+        // content whenever a dismissed entry still leads the queue.
+        if !approvalCardOnScreen {
+            showNextPending()
+        }
+        if !burstAlreadyInProgress {
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
