@@ -125,6 +125,27 @@ final class AppState {
     var pendingPermission: PermissionRequest? { permissionQueue.first }
     /// Computed: first item in question queue
     var pendingQuestion: QuestionRequest? { questionQueue.first }
+
+    /// The queued request belonging to a specific session. A card is addressed
+    /// by session, so it must render (and resolve) that session's request
+    /// rather than whatever currently sits at the head of the queue. (#308)
+    func pendingPermission(forSession sessionId: String) -> PermissionRequest? {
+        permissionQueue.first { ($0.event.sessionId ?? "default") == sessionId }
+    }
+
+    func pendingQuestion(forSession sessionId: String) -> QuestionRequest? {
+        questionQueue.first { ($0.event.sessionId ?? "default") == sessionId }
+    }
+
+    /// 1-based position for a card's "N of M" label. The card may be showing a
+    /// request that is not the head, so the position has to be looked up. (#308)
+    func permissionQueuePosition(forSession sessionId: String) -> Int {
+        (permissionQueue.firstIndex { ($0.event.sessionId ?? "default") == sessionId } ?? 0) + 1
+    }
+
+    func questionQueuePosition(forSession sessionId: String) -> Int {
+        (questionQueue.firstIndex { ($0.event.sessionId ?? "default") == sessionId } ?? 0) + 1
+    }
     /// Preview-only: mock question payload for DebugHarness (no continuation needed)
     var previewQuestionPayload: QuestionPayload?
     var surface: IslandSurface = .collapsed {
@@ -1370,9 +1391,44 @@ final class AppState {
         refreshDerivedState()
     }
 
-    func approvePermission(always: Bool = false) {
-        guard !permissionQueue.isEmpty else { return }
-        let pending = permissionQueue.removeFirst()
+    /// Index of the queued request the user actually acted on.
+    ///
+    /// The card on screen is identified by its session, but the answer used to
+    /// be applied to `queue.removeFirst()`. Anything that mutates the head
+    /// while a card is open — a peer disconnect draining another session, a
+    /// stale tool-use eviction, the reorder in `showNextPending()` — would then
+    /// resolve whichever request happened to be first, delivering the answer to
+    /// the wrong CLI. Callers that know which session the card belongs to pass
+    /// it in; `nil` keeps the head-of-queue behaviour for surfaces that only
+    /// ever mirror the head (keyboard shortcuts, iPhone/Watch Buddy). (#308)
+    private func permissionIndex(expecting expected: String?) -> Int? {
+        guard let expected else { return permissionQueue.isEmpty ? nil : 0 }
+        return permissionQueue.firstIndex { ($0.event.sessionId ?? "default") == expected }
+    }
+
+    /// Question-queue counterpart of `permissionIndex(expecting:)`. (#308)
+    private func questionIndex(expecting expected: String?) -> Int? {
+        guard let expected else { return questionQueue.isEmpty ? nil : 0 }
+        return questionQueue.firstIndex { ($0.event.sessionId ?? "default") == expected }
+    }
+
+    /// The request the card was showing is no longer queued (answered in the
+    /// terminal, drained on disconnect). `showNextPending()` drops the dead card
+    /// and re-opens whatever is genuinely waiting. (#308)
+    private func discardStalePanelAction(expected: String, kind: String) {
+        log.notice("⚠️ ignored \(kind, privacy: .public) for session=\(expected, privacy: .public) — request no longer queued")
+        showNextPending()
+        refreshDerivedState()
+    }
+
+    func approvePermission(always: Bool = false, expectedSessionId: String? = nil) {
+        guard let index = permissionIndex(expecting: expectedSessionId) else {
+            if let expectedSessionId {
+                discardStalePanelAction(expected: expectedSessionId, kind: "approve")
+            }
+            return
+        }
+        let pending = permissionQueue.remove(at: index)
         let sessionId = pending.event.sessionId ?? "default"
         dismissedPermissionSessionIds.remove(sessionId)
         let responseData: Data
@@ -1570,9 +1626,14 @@ final class AppState {
         })?.key
     }
 
-    func denyPermission() {
-        guard !permissionQueue.isEmpty else { return }
-        let pending = permissionQueue.removeFirst()
+    func denyPermission(expectedSessionId: String? = nil) {
+        guard let index = permissionIndex(expecting: expectedSessionId) else {
+            if let expectedSessionId {
+                discardStalePanelAction(expected: expectedSessionId, kind: "deny")
+            }
+            return
+        }
+        let pending = permissionQueue.remove(at: index)
         let sessionId = pending.event.sessionId ?? "default"
         dismissedPermissionSessionIds.remove(sessionId)
         let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#
@@ -1594,8 +1655,14 @@ final class AppState {
         refreshDerivedState()
     }
 
-    func dismissPermissionPrompt() {
-        guard let pending = permissionQueue.first else { return }
+    func dismissPermissionPrompt(expectedSessionId: String? = nil) {
+        guard let index = permissionIndex(expecting: expectedSessionId) else {
+            if let expectedSessionId {
+                discardStalePanelAction(expected: expectedSessionId, kind: "dismiss")
+            }
+            return
+        }
+        let pending = permissionQueue[index]
 
         let sessionId = pending.event.sessionId ?? "default"
         dismissedPermissionSessionIds.insert(sessionId)
@@ -1779,17 +1846,22 @@ final class AppState {
         refreshDerivedState()
     }
 
-    func answerQuestion(_ answer: String) {
-        guard !questionQueue.isEmpty else { return }
+    func answerQuestion(_ answer: String, expectedSessionId: String? = nil) {
+        guard let index = questionIndex(expecting: expectedSessionId) else {
+            if let expectedSessionId {
+                discardStalePanelAction(expected: expectedSessionId, kind: "answer")
+            }
+            return
+        }
         // Multi-question wizards (AskUserQuestion, Codex app-server) use the batch
         // path — direct single answers are not processed.
-        if questionQueue[0].askUserQuestionState != nil,
-           (questionQueue[0].isFromPermission || questionQueue[0].isCodexAppServer) {
+        if questionQueue[index].askUserQuestionState != nil,
+           (questionQueue[index].isFromPermission || questionQueue[index].isCodexAppServer) {
             return
         }
         // Codex app-server questions reply over the JSON-RPC client, not a hook.
-        if questionQueue[0].isCodexAppServer {
-            let pending = questionQueue.removeFirst()
+        if questionQueue[index].isCodexAppServer {
+            let pending = questionQueue.remove(at: index)
             let answerKey = pending.askUserQuestionState?.items.first?.answerKey
                 ?? pending.question.header ?? "answer"
             pending.resolveCodexAppServer([answerKey: [answer]])
@@ -1799,7 +1871,7 @@ final class AppState {
             refreshDerivedState()
             return
         }
-        let pending = questionQueue.removeFirst()
+        let pending = questionQueue.remove(at: index)
         let responseData: Data
         if pending.isFromPermission {
             let answerKey = pending.question.header ?? "answer"
@@ -1842,11 +1914,19 @@ final class AppState {
         refreshDerivedState()
     }
 
-    func answerQuestionMulti(_ answers: [(question: String, answer: String)]) {
-        guard !questionQueue.isEmpty else { return }
+    func answerQuestionMulti(
+        _ answers: [(question: String, answer: String)],
+        expectedSessionId: String? = nil
+    ) {
+        guard let index = questionIndex(expecting: expectedSessionId) else {
+            if let expectedSessionId {
+                discardStalePanelAction(expected: expectedSessionId, kind: "answer")
+            }
+            return
+        }
         // Codex app-server questions reply over the JSON-RPC client, not a hook.
-        if questionQueue[0].isCodexAppServer {
-            let pending = questionQueue.removeFirst()
+        if questionQueue[index].isCodexAppServer {
+            let pending = questionQueue.remove(at: index)
             var answersByKey: [String: [String]] = [:]
             if let askState = pending.askUserQuestionState {
                 // Match by position — the wizard collects answers in item order.
@@ -1864,7 +1944,7 @@ final class AppState {
             refreshDerivedState()
             return
         }
-        let pending = questionQueue.removeFirst()
+        let pending = questionQueue.remove(at: index)
         let responseData: Data
         if pending.isFromPermission {
             var answersDict: [String: String] = [:]
@@ -1942,9 +2022,14 @@ final class AppState {
         return updatedInput
     }
 
-    func skipQuestion() {
-        guard !questionQueue.isEmpty else { return }
-        let pending = questionQueue.removeFirst()
+    func skipQuestion(expectedSessionId: String? = nil) {
+        guard let index = questionIndex(expecting: expectedSessionId) else {
+            if let expectedSessionId {
+                discardStalePanelAction(expected: expectedSessionId, kind: "skip")
+            }
+            return
+        }
+        let pending = questionQueue.remove(at: index)
         if pending.isCodexAppServer {
             // No "skip" verb in the Codex protocol — abandon the request so the
             // server stops waiting (it will re-prompt or fall back to its TUI).
@@ -2021,9 +2106,32 @@ final class AppState {
         }
     }
 
+    /// A card the user can no longer act on must never stay on screen: the panel
+    /// would sit expanded showing a request that is gone or dismissed, and any
+    /// click landing on it can only be discarded. Auto-open suppression decides
+    /// whether to open a *new* card, not whether to keep a dead one, so this
+    /// runs unconditionally. (#308)
+    ///
+    /// "Dead" is the same predicate `nextVisiblePermissionIndex()` applies:
+    /// dismissed counts as not visible. Testing queue membership alone would
+    /// keep a dismissed card up, because dismissing hides without dequeuing.
+    private func collapseStaleCardSurface() {
+        switch surface {
+        case .approvalCard(let sid)
+            where pendingPermission(forSession: sid) == nil
+                || dismissedPermissionSessionIds.contains(sid):
+            surface = .collapsed
+        case .questionCard(let sid) where pendingQuestion(forSession: sid) == nil:
+            surface = .collapsed
+        default:
+            break
+        }
+    }
+
     /// After dequeuing, show next pending item or collapse
     @discardableResult
     func showNextPending() -> Bool {
+        collapseStaleCardSurface()
         if let idx = nextVisiblePermissionIndex() {
             let next = permissionQueue.remove(at: idx)
             permissionQueue.insert(next, at: 0)
