@@ -6,11 +6,13 @@ import CodeIslandCore
 final class AppStatePermissionFlowTests: XCTestCase {
     private var savedCodexHome: String?
     private var savedSmartSuppress: Any?
+    private var savedAutoExpandOnPermission: Any?
 
     override func setUp() {
         super.setUp()
         savedCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
         savedSmartSuppress = UserDefaults.standard.object(forKey: SettingsKey.smartSuppress)
+        savedAutoExpandOnPermission = UserDefaults.standard.object(forKey: SettingsKey.autoExpandOnPermission)
     }
 
     override func tearDown() {
@@ -24,7 +26,56 @@ final class AppStatePermissionFlowTests: XCTestCase {
         } else {
             UserDefaults.standard.removeObject(forKey: SettingsKey.smartSuppress)
         }
+        if let savedAutoExpandOnPermission {
+            UserDefaults.standard.set(savedAutoExpandOnPermission, forKey: SettingsKey.autoExpandOnPermission)
+        } else {
+            UserDefaults.standard.removeObject(forKey: SettingsKey.autoExpandOnPermission)
+        }
         super.tearDown()
+    }
+
+    /// #292 — Smart Suppress only covers "the agent's own terminal is in front".
+    /// Working in any other app still got the panel thrown in your face on every
+    /// approval, so auto-expand is now its own switch.
+    func testAutoExpandOffKeepsIslandCollapsedButLeavesTheRequestActionable() async throws {
+        UserDefaults.standard.set(false, forKey: SettingsKey.autoExpandOnPermission)
+        let appState = AppState()
+        let event = try makePermissionRequestEvent(sessionId: "s-no-expand", toolName: "Bash")
+
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { continuation in
+                appState.handlePermissionRequest(event, continuation: continuation)
+            }
+        }
+        await Task.yield()
+
+        XCTAssertEqual(appState.surface, .collapsed, "auto-expand off must not steal focus")
+        XCTAssertEqual(appState.permissionQueue.count, 1, "the request still waits for a decision")
+        XCTAssertEqual(appState.sessions["s-no-expand"]?.status, .waitingApproval)
+        XCTAssertEqual(appState.activeSessionId, "s-no-expand")
+
+        // Still resolvable — the card is one click away in the session list.
+        appState.approvePermission(expectedSessionId: "s-no-expand")
+        let response = await responseTask.value
+        XCTAssertEqual(try extractPermissionBehavior(from: response), "allow")
+    }
+
+    func testAutoExpandOnStillOpensTheApprovalCard() async throws {
+        UserDefaults.standard.set(true, forKey: SettingsKey.autoExpandOnPermission)
+        UserDefaults.standard.set(false, forKey: SettingsKey.smartSuppress)
+        let appState = AppState()
+        let event = try makePermissionRequestEvent(sessionId: "s-expand", toolName: "Bash")
+
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { continuation in
+                appState.handlePermissionRequest(event, continuation: continuation)
+            }
+        }
+        await Task.yield()
+
+        XCTAssertEqual(appState.surface, .approvalCard(sessionId: "s-expand"))
+        appState.approvePermission(expectedSessionId: "s-expand")
+        _ = await responseTask.value
     }
 
     func testSmartSuppressKeepsPendingSurfaceCollapsedWhenTerminalIsFrontmost() {

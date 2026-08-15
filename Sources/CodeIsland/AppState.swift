@@ -1042,6 +1042,18 @@ final class AppState {
         !shouldAutoOpenPendingSurface(for: sessionId)
     }
 
+    /// Whether a permission request may expand the island on its own. Smart
+    /// Suppress only covers "the agent's own terminal is in front"; users who
+    /// work in a *different* app still got the panel thrown in their face on
+    /// every approval. With this off the sound and the session-list badge still
+    /// fire and the card is one click away, but focus is never stolen. (#292)
+    static func autoExpandOnPermission(_ defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: SettingsKey.autoExpandOnPermission) != nil else {
+            return SettingsDefaults.autoExpandOnPermission
+        }
+        return defaults.bool(forKey: SettingsKey.autoExpandOnPermission)
+    }
+
     func shouldAutoOpenPendingSurface(
         for sessionId: String,
         isTerminalFrontmost: (SessionSnapshot) -> Bool = TerminalVisibilityDetector.isTerminalFrontmostForSession
@@ -2328,7 +2340,9 @@ final class AppState {
             let sid = next.event.sessionId ?? "default"
             activeSessionId = sid
             // When the session list is open, keep it open; approvals can be handled inline.
-            if surface != .sessionList, shouldAutoOpenPendingSurface(for: sid) {
+            if surface != .sessionList,
+               Self.autoExpandOnPermission(),
+               shouldAutoOpenPendingSurface(for: sid) {
                 surface = .approvalCard(sessionId: sid)
             }
             return true

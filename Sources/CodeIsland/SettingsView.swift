@@ -381,6 +381,7 @@ private struct BehaviorPage: View {
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.collapseOnMouseLeave) private var collapseOnMouseLeave = SettingsDefaults.collapseOnMouseLeave
     @AppStorage(SettingsKey.autoCollapseAfterSessionJump) private var autoCollapseAfterSessionJump = SettingsDefaults.autoCollapseAfterSessionJump
+    @AppStorage(SettingsKey.autoExpandOnPermission) private var autoExpandOnPermission = SettingsDefaults.autoExpandOnPermission
     // Seeded through the migration shim so a legacy autoExpandOnCompletion=false
     // shows up as "off" here; writes go to the new key via onChange.
     @State private var completionStyle: String = AppState.completionStyle().rawValue
@@ -438,6 +439,12 @@ private struct BehaviorPage: View {
                     title: l10n["smart_suppress"],
                     desc: l10n["smart_suppress_desc"],
                     isOn: $smartSuppress,
+                    animation: .smartSuppress
+                )
+                BehaviorToggleRow(
+                    title: l10n["auto_expand_on_permission"],
+                    desc: l10n["auto_expand_on_permission_desc"],
+                    isOn: $autoExpandOnPermission,
                     animation: .smartSuppress
                 )
                 BehaviorToggleRow(

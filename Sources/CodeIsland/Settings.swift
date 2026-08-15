@@ -33,6 +33,7 @@ enum SettingsKey {
     static let smartSuppress = "smartSuppress"
     static let collapseOnMouseLeave = "collapseOnMouseLeave"
     static let autoCollapseAfterSessionJump = "autoCollapseAfterSessionJump"
+    static let autoExpandOnPermission = "autoExpandOnPermission"
     static let autoExpandOnCompletion = "autoExpandOnCompletion"
     static let pluginSessionMode = "pluginSessionMode"  // "separate" | "merge" | "hide"
     static let hapticOnHover = "hapticOnHover"
@@ -139,6 +140,7 @@ struct SettingsDefaults {
     static let smartSuppress = true
     static let collapseOnMouseLeave = true
     static let autoCollapseAfterSessionJump = false
+    static let autoExpandOnPermission = true
     static let autoExpandOnCompletion = true
     static let pluginSessionMode = "separate"
     static let hapticOnHover = false
@@ -223,6 +225,7 @@ class SettingsManager {
             SettingsKey.smartSuppress: SettingsDefaults.smartSuppress,
             SettingsKey.collapseOnMouseLeave: SettingsDefaults.collapseOnMouseLeave,
             SettingsKey.autoCollapseAfterSessionJump: SettingsDefaults.autoCollapseAfterSessionJump,
+            SettingsKey.autoExpandOnPermission: SettingsDefaults.autoExpandOnPermission,
             SettingsKey.autoExpandOnCompletion: SettingsDefaults.autoExpandOnCompletion,
             SettingsKey.pluginSessionMode: SettingsDefaults.pluginSessionMode,
             SettingsKey.hapticOnHover: SettingsDefaults.hapticOnHover,
