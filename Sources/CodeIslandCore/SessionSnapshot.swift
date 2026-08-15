@@ -680,6 +680,48 @@ public struct SessionSnapshot: Sendable {
         "com.anthropic.claudefordesktop": "claude",
     ]
 
+    /// Source id for the native app that owns `bundleId`, if any.
+    public static func sourceForAppBundleId(_ bundleId: String) -> String? {
+        appBundleSources[bundleId]
+    }
+
+    /// Source used for the session-card mascot.
+    ///
+    /// Prefers the hook/discovery source. When that is missing, fall back to the
+    /// native-app bundle map so a Cursor/Codex desktop session does not render
+    /// as the default Claude mascot while the right-hand badge still says Cursor.
+    public var mascotSource: String {
+        if let normalized = Self.normalizedSupportedSource(source) {
+            return normalized
+        }
+        if let bid = termBundleId, let inferred = Self.appBundleSources[bid] {
+            return inferred
+        }
+        return source
+    }
+
+    /// True when this is a CLI agent hosted inside another IDE/app terminal
+    /// (e.g. Claude Code inside Cursor) — mascot/badge should follow the CLI,
+    /// not the host IDE brand.
+    public var isCLIHostedInForeignApp: Bool {
+        guard isIDETerminal,
+              let src = Self.normalizedSupportedSource(source),
+              let bid = termBundleId,
+              let hostSource = Self.appBundleSources[bid] else {
+            return false
+        }
+        return src != hostSource
+    }
+
+    /// Right-hand session badge text: CLI brand when hosted in a foreign IDE,
+    /// otherwise the host terminal/app name.
+    public var terminalBadgeLabel: String? {
+        if isCLIHostedInForeignApp {
+            return sourceLabel
+        }
+        return terminalName
+    }
+
     /// Short terminal/app name for display tag
     public var terminalName: String? {
         if isRemote {
@@ -1284,6 +1326,13 @@ public func fillMissingParentMetadataFromSubagentEvent(
        source != "claude" {
         sessions[sessionId]?.source = source
     }
+    // Cursor Task hooks often omit `--source` and keep the default "claude".
+    // Rebrand when transcript_path is clearly under Cursor agent-transcripts.
+    if sessions[sessionId]?.source == "claude",
+       let path = event.rawJSON["transcript_path"] as? String,
+       CursorSessionFolding.isCursorAgentTranscriptPath(path) {
+        sessions[sessionId]?.source = "cursor"
+    }
 
     let cwdMissing = sessions[sessionId]?.cwd == nil
         || SessionSnapshot.isUnhelpfulHookCwd(sessions[sessionId]?.cwd ?? "")
@@ -1323,6 +1372,18 @@ private func shouldReopenCursorSubagentOnPrompt(event: HookEvent, session: Sessi
         ?? SessionSnapshot.normalizedSupportedSource(event.rawJSON["source"] as? String)
         ?? session?.source
     return source == "cursor" || source == "cursor-cli"
+}
+
+/// Whether folded-child prompt/response text should appear on the parent card.
+private func shouldSurfaceCursorSubagentChat(event: HookEvent, session: SessionSnapshot?) -> Bool {
+    if (event.rawJSON["_cursor_subagent"] as? Bool) == true {
+        return true
+    }
+    return CursorSubsessionRouter.isCursorFamilySource(
+        (event.rawJSON["_source"] as? String)
+            ?? (event.rawJSON["source"] as? String)
+            ?? session?.source
+    )
 }
 
 public func extractMetadata(into sessions: inout [String: SessionSnapshot], sessionId: String, event: HookEvent) {
@@ -1408,6 +1469,13 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     }
     if let source = SessionSnapshot.normalizedSupportedSource(event.rawJSON["_source"] as? String) {
         sessions[sessionId]?.source = source
+    } else if sessions[sessionId]?.source == "claude",
+              let path = (event.rawJSON["transcript_path"] as? String)
+                ?? (event.rawJSON["transcriptPath"] as? String),
+              CursorSessionFolding.isCursorAgentTranscriptPath(path) {
+        // Untagged Cursor Agent Task hooks inherit SessionSnapshot's default
+        // "claude" — rebrand so merge/hide and the badge follow Cursor.
+        sessions[sessionId]?.source = "cursor"
     }
     // cmux surface / workspace (injected by bridge from CMUX_SURFACE_ID / CMUX_WORKSPACE_ID env vars)
     if let surface = event.rawJSON["_cmux_surface_id"] as? String, !surface.isEmpty {
@@ -1573,6 +1641,21 @@ private func handleSubagentEvent(
         }
         sessions[sessionId]?.subagents[agentId]?.status = .processing
         sessions[sessionId]?.subagents[agentId]?.lastActivity = Date()
+        // Cursor merge-into-main only: keep parent chat text live for folded Tasks
+        // (and for main-chat hooks incorrectly tagged with agent_id). Do not apply
+        // to Codex/plugin children — their prompts must not overwrite the parent card.
+        if shouldSurfaceCursorSubagentChat(event: event, session: sessions[sessionId]),
+           let prompt = firstStringFromEvent(
+               event,
+               keys: ["prompt", "user_prompt", "userPrompt"],
+               includeNested: true
+           ) {
+            sessions[sessionId]?.lastUserPrompt = prompt
+            if sessions[sessionId]?.recentMessages.last?.isUser == true {
+                sessions[sessionId]?.recentMessages.removeLast()
+            }
+            sessions[sessionId]?.addRecentMessage(ChatMessage(isUser: true, text: prompt))
+        }
         if sessions[sessionId]?.status != .waitingApproval && sessions[sessionId]?.status != .waitingQuestion {
             let agentType = sessions[sessionId]?.subagents[agentId]?.agentType
             sessions[sessionId]?.status = .running
@@ -1645,9 +1728,20 @@ private func handleSubagentEvent(
 
     case "AfterAgentResponse":
         // Merged Cursor Task events arrive with parent session_id + child agent_id.
-        // Handle here so they do not overwrite the parent's reply or enqueue a false completion.
         guard ensureSubagent(sessions: &sessions, sessionId: sessionId, agentId: agentId, event: event) else {
             return true
+        }
+        // Cursor-only: surface the folded reply on the parent card, but never
+        // enqueue parent-turn completion from a Task response.
+        if shouldSurfaceCursorSubagentChat(event: event, session: sessions[sessionId]),
+           let text = firstStringFromEvent(
+               event,
+               keys: ["text", "message"],
+               includeNested: true
+           ),
+           !text.isEmpty {
+            sessions[sessionId]?.lastAssistantMessage = text
+            sessions[sessionId]?.addRecentMessage(ChatMessage(isUser: false, text: text))
         }
         sessions[sessionId]?.subagents[agentId]?.status = .processing
         sessions[sessionId]?.subagents[agentId]?.lastActivity = Date()

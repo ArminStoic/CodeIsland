@@ -1,5 +1,6 @@
 import XCTest
 @testable import CodeIsland
+import CodeIslandCore
 
 @MainActor
 final class HookServerCursorProbeTests: XCTestCase {
@@ -47,6 +48,12 @@ final class HookServerCursorProbeTests: XCTestCase {
             "Unrelated _source plus bare cursor text must not force a parse"
         )
 
+        // Misbranded Claude-default Task under ~/.cursor/.../agent-transcripts must parse.
+        let misbrandedCursorPath = Data(
+            #"{"_source":"claude","transcript_path":"/Users/u/.cursor/projects/x/agent-transcripts/p/subagents/c.jsonl"}"#.utf8
+        )
+        XCTAssertTrue(HookServer.mayNeedCursorSubsessionRouting(data: misbrandedCursorPath))
+
         // Non-cursor + agent-transcripts + unrelated `\u` must not claim Cursor.
         let wrongSourceWithUnicodeElsewhere = Data(
             #"{"_source":"claude","text":"\u0041","transcript_path":"\#(path)"}"#.utf8
@@ -57,5 +64,25 @@ final class HookServerCursorProbeTests: XCTestCase {
 
         let noTranscripts = Data(#"{"_source":"cursor","session_id":"abc"}"#.utf8)
         XCTAssertFalse(HookServer.mayNeedCursorSubsessionRouting(data: noTranscripts))
+        // Without agent-transcripts, source-only probe still sees Cursor (merge/hide gate).
+        XCTAssertTrue(HookServer.mayBeCursorHookSource(data: noTranscripts))
+    }
+
+    func testMayBeCursorHookSourceAcceptsSpacedAndUnicodeWithoutTranscripts() {
+        XCTAssertTrue(
+            HookServer.mayBeCursorHookSource(
+                data: Data(#"{"_source" : "cursor-cli","session_id":"x"}"#.utf8)
+            )
+        )
+        XCTAssertTrue(
+            HookServer.mayBeCursorHookSource(
+                data: Data(#"{"_source":"\u0063ursor","session_id":"x"}"#.utf8)
+            )
+        )
+        XCTAssertFalse(
+            HookServer.mayBeCursorHookSource(
+                data: Data(#"{"_source":"claude","session_id":"x"}"#.utf8)
+            )
+        )
     }
 }
