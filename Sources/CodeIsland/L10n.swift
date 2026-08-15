@@ -134,6 +134,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "Hide",
 
         // Auto-approve tools
+        "auto_approve_sources": "Always-proceed Agents",
+        "auto_approve_sources_desc": "Comma-separated agent ids. Permission requests from these agents are approved without a card — for CLIs already running in their own Turbo / YOLO / always-proceed mode. Questions are still asked.",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "Auto-approve Tools",
         "auto_approve_tools_desc": "These internal tools are auto-approved without showing a confirmation dialog. Disable tools you want to review manually.",
         "auto_approve_TaskCreate": "Create a new task",
@@ -483,6 +486,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "Ausblenden",
 
         // Auto-approve tools
+        "auto_approve_sources": "Agenten im Durchlaufmodus",
+        "auto_approve_sources_desc": "Kommagetrennte Agenten-IDs. Freigabeanfragen dieser Agenten werden ohne Karte genehmigt — für CLIs, die bereits im Turbo-/YOLO-Modus laufen. Fragen werden weiterhin gestellt.",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "Tools automatisch genehmigen",
         "auto_approve_tools_desc": "Diese internen Tools werden ohne Bestätigungsdialog automatisch genehmigt. Deaktiviere Tools, die du manuell prüfen möchtest.",
         "auto_approve_TaskCreate": "Neue Aufgabe erstellen",
@@ -828,6 +834,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "隐藏",
 
         // Auto-approve tools
+        "auto_approve_sources": "免确认的 Agent",
+        "auto_approve_sources_desc": "英文逗号分隔的 agent 标识。来自这些 agent 的权限请求直接放行、不弹卡片——适合本身已开 Turbo / YOLO / always-proceed 模式的 CLI。提问（AskUserQuestion）仍会正常询问。",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "自动批准工具",
         "auto_approve_tools_desc": "这些内部工具会自动批准，无需弹出确认对话框。关闭你想要手动审核的工具。",
         "auto_approve_TaskCreate": "创建新任务",
@@ -1177,6 +1186,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "隱藏",
 
         // Auto-approve tools
+        "auto_approve_sources": "免確認的 Agent",
+        "auto_approve_sources_desc": "以半形逗號分隔的 agent 識別碼。來自這些 agent 的權限請求直接放行、不顯示卡片——適合本身已開 Turbo / YOLO / always-proceed 模式的 CLI。提問（AskUserQuestion）仍會照常詢問。",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "自動核准工具",
         "auto_approve_tools_desc": "這些內部工具會自動核准，不需彈出確認對話框。關閉你想手動審核的工具。",
         "auto_approve_TaskCreate": "建立新任務",
@@ -1526,6 +1538,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "非表示",
 
         // Auto-approve tools
+        "auto_approve_sources": "常時続行エージェント",
+        "auto_approve_sources_desc": "カンマ区切りのエージェント ID。これらのエージェントからの承認要求はカードを出さずに許可します — すでに Turbo / YOLO モードで動いている CLI 向けです。質問は引き続き表示されます。",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "自動承認ツール",
         "auto_approve_tools_desc": "これらの内部ツールは確認ダイアログなしで自動承認されます。手動で確認したいツールはオフにしてください。",
         "auto_approve_TaskCreate": "新しいタスクを作成",
@@ -1875,6 +1890,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "숨김",
 
         // Auto-approve tools
+        "auto_approve_sources": "항상 진행 에이전트",
+        "auto_approve_sources_desc": "쉼표로 구분된 에이전트 ID. 이 에이전트의 권한 요청은 카드 없이 승인됩니다 — 이미 Turbo / YOLO 모드로 실행 중인 CLI용입니다. 질문은 계속 표시됩니다.",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "자동 승인 도구",
         "auto_approve_tools_desc": "이 내부 도구들은 확인 대화상자 없이 자동 승인됩니다. 수동으로 검토하려는 도구는 비활성화하세요.",
         "auto_approve_TaskCreate": "새 작업 만들기",
@@ -2224,6 +2242,9 @@ final class L10n: ObservableObject {
         "plugin_session_mode_hide": "Gizle",
 
         // Auto-approve tools
+        "auto_approve_sources": "Her Zaman Devam Eden Ajanlar",
+        "auto_approve_sources_desc": "Virgülle ayrılmış ajan kimlikleri. Bu ajanlardan gelen izin istekleri kart gösterilmeden onaylanır — zaten Turbo / YOLO modunda çalışan CLI'lar için. Sorular yine sorulur.",
+        "auto_approve_sources_placeholder": "google-antigravity, cursor",
         "auto_approve_tools": "Otomatik Onay Araçları",
         "auto_approve_tools_desc": "Bu iç araçlar onay iletişim kutusu gösterilmeden otomatik olarak onaylanır. Manuel olarak incelemek istediğiniz araçları devre dışı bırakın.",
         "auto_approve_TaskCreate": "Yeni görev oluştur",

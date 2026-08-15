@@ -1042,6 +1042,16 @@ final class AppState {
         !shouldAutoOpenPendingSurface(for: sessionId)
     }
 
+    /// Notification kinds that describe the *account*, not the conversation.
+    /// CodeBuddy's documented `notification_type` set is `permission_prompt`,
+    /// `idle_prompt`, `auth_success`; only the last is boot-time auth chatter,
+    /// and it arrives before `SessionStart` with its own session id. Matching by
+    /// prefix so a future `auth_failed`/`auth_expired` behaves the same. (#288)
+    nonisolated static func isAccountNotification(_ event: HookEvent) -> Bool {
+        guard let kind = notificationKind(from: event) else { return false }
+        return kind.hasPrefix("auth")
+    }
+
     /// Whether a permission request may expand the island on its own. Smart
     /// Suppress only covers "the agent's own terminal is in front"; users who
     /// work in a *different* app still got the panel thrown in their face on
@@ -1253,6 +1263,15 @@ final class AppState {
 
         let sessionId = event.sessionId ?? "default"
         let normalizedEventName = EventNormalizer.normalize(event.eventName)
+
+        // Account chatter, not session activity. CodeBuddy fires
+        // Notification(auth_success) as the CLI boots — before SessionStart and
+        // under a different session id — which minted a second card that then
+        // never updated (#288).
+        if normalizedEventName == "Notification",
+           Self.isAccountNotification(event) {
+            return
+        }
 
         if source?.lowercased() == "codex",
            event.rawJSON["_term_bundle"] as? String == Self.codexAppBundleId,
@@ -2431,13 +2450,17 @@ final class AppState {
         case "claude":
             return readModelFromTranscript(sessionId: sessionId, cwd: session.cwd)
         case "qoder", "qoder-cli":
-            return readModelFromProjectTranscript(
-                sessionId: sessionId,
-                cwd: session.cwd,
-                basePath: FileManager.default.homeDirectoryForCurrentUser.path + "/.qoder/projects",
-                projectEncoder: { $0.claudeProjectDirEncoded() },
-                reader: readRecentFromTranscript(path:)
-            )
+            // ~/.qoder for the international build, ~/.qoder-cn for 国行 (#289).
+            return qoderConfigRoots.lazy.compactMap { root in
+                readModelFromProjectTranscript(
+                    sessionId: sessionId,
+                    cwd: session.cwd,
+                    basePath: FileManager.default.homeDirectoryForCurrentUser.path + "/\(root)/projects",
+                    projectEncoder: { $0.claudeProjectDirEncoded() },
+                    reader: readRecentFromTranscript(path:)
+                )
+            }.first
+
         case "droid":
             return readModelFromProjectTranscript(
                 sessionId: sessionId,
@@ -2593,14 +2616,21 @@ final class AppState {
         return findRecentCodexSession(base: base, cwd: cwd, after: processStart, fm: .default)
     }
 
+    /// Config roots a Qoder session's transcript can live under: the international
+    /// build uses ~/.qoder, the China build (`qoderclicn`) uses ~/.qoder-cn (#289).
+    private nonisolated static let qoderConfigRoots = [".qoder", ".qoder-cn"]
+
     private nonisolated static func qoderTranscriptPath(sessionId: String, cwd: String?) -> String? {
         guard let cwd else { return nil }
-        let projectPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".qoder/projects/\(cwd.claudeProjectDirEncoded())")
-        let candidates = [
-            projectPath.appendingPathComponent("\(sessionId).jsonl").path,
-            projectPath.appendingPathComponent("transcript/\(sessionId).jsonl").path
-        ]
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = qoderConfigRoots.flatMap { root -> [String] in
+            let projectPath = home
+                .appendingPathComponent("\(root)/projects/\(cwd.claudeProjectDirEncoded())")
+            return [
+                projectPath.appendingPathComponent("\(sessionId).jsonl").path,
+                projectPath.appendingPathComponent("transcript/\(sessionId).jsonl").path,
+            ]
+        }
 
         return candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
@@ -4345,16 +4375,24 @@ final class AppState {
     }
 
     /// Standalone Qoder CLI — must not match the desktop IDE/helper (#248).
+    /// Both Qoder CLI builds: the international `qodercli` under ~/.qoder and the
+    /// China build `qoderclicn` under ~/.qoder-cn. Same hook contract, one source
+    /// (#289) — the CN binary is a separate build, so its own paths are needed.
     private nonisolated static func findQoderCliPids(candidatePids: [pid_t]? = nil) -> [pid_t] {
         findPids(
             matchingPathSubstrings: [
                 "/.qoder/bin/qodercli/",
                 "/@qoder-ai/qodercli",
+                "/.qoder-cn/bin/qoderclicn/",
+                "/@qoder-ai/qoderclicn",
             ],
             argSubstrings: [
                 "/opt/homebrew/bin/qodercli",
                 "/usr/local/bin/qodercli",
                 "/.local/bin/qodercli",
+                "/opt/homebrew/bin/qoderclicn",
+                "/usr/local/bin/qoderclicn",
+                "/.local/bin/qoderclicn",
             ],
             candidatePids: candidatePids
         )

@@ -392,6 +392,7 @@ private struct BehaviorPage: View {
     @AppStorage(SettingsKey.rotationInterval) private var rotationInterval = SettingsDefaults.rotationInterval
     @AppStorage(SettingsKey.maxToolHistory) private var maxToolHistory = SettingsDefaults.maxToolHistory
     @AppStorage(SettingsKey.autoApproveTools) private var autoApproveRaw: String = SettingsDefaults.autoApproveTools
+    @AppStorage(SettingsKey.autoApproveSources) private var autoApproveSources: String = SettingsDefaults.autoApproveSources
     @AppStorage(SettingsKey.excludedHookCwdSubstrings) private var excludedHookCwdSubstrings: String = SettingsDefaults.excludedHookCwdSubstrings
     @AppStorage(SettingsKey.claudeConfigDir) private var claudeConfigDir: String = SettingsDefaults.claudeConfigDir
     @AppStorage(SettingsKey.webhookEnabled) private var webhookEnabled: Bool = SettingsDefaults.webhookEnabled
@@ -505,6 +506,20 @@ private struct BehaviorPage: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(l10n["auto_approve_sources"])
+                        .font(.system(size: 12, weight: .medium))
+                    Text(l10n["auto_approve_sources_desc"])
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        l10n["auto_approve_sources_placeholder"],
+                        text: $autoApproveSources
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
                 }
             }
 

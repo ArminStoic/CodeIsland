@@ -122,6 +122,26 @@ class HookServer {
         SettingsManager.shared.autoApproveTools
     }
 
+    /// Whether this event's agent is on the user's always-proceed list (#283).
+    /// Matched on both the raw `_source` and its normalized form so "agy",
+    /// "google-antigravity" and "antigravity-cli" all resolve to one entry.
+    static func isAutoApprovedSource(_ event: HookEvent) -> Bool {
+        isAutoApprovedSource(event, approved: SettingsManager.shared.autoApproveSources)
+    }
+
+    nonisolated static func isAutoApprovedSource(
+        _ event: HookEvent,
+        approved: Set<String>
+    ) -> Bool {
+        guard !approved.isEmpty,
+              let raw = event.rawJSON["_source"] as? String else { return false }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return false }
+        if approved.contains(trimmed) { return true }
+        guard let normalized = SessionSnapshot.normalizedSupportedSource(trimmed) else { return false }
+        return approved.contains(normalized)
+    }
+
     /// User-configured cwd substring blocklist for plugin/background hooks (e.g. claude-mem).
     /// Empty default = no filtering. Trimmed, blank entries skipped.
     private static func eventMatchesExcludedCwd(_ cwd: String) -> Bool {
@@ -724,6 +744,17 @@ class HookServer {
 
             // Auto-approve safe internal tools without showing UI
             if let toolName = event.toolName, Self.autoApproveTools.contains(toolName) {
+                let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+                sendResponse(connection: connection, data: Data(response.utf8))
+                return
+            }
+
+            // Agents the user has already put in an always-proceed mode
+            // (Antigravity Turbo, Cursor YOLO, …). Re-asking on the island is the
+            // exact interruption that mode exists to remove (#283). Questions are
+            // not permissions, so AskUserQuestion is deliberately excluded below.
+            if event.toolName != "AskUserQuestion",
+               Self.isAutoApprovedSource(event) {
                 let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
                 sendResponse(connection: connection, data: Data(response.utf8))
                 return

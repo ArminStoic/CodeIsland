@@ -386,6 +386,30 @@ struct ConfigInstaller {
                 ("PreCompact", 5, true),
             ]
         ),
+        // Qoder CN (国行) — the China build ships as its own `qoderclicn` binary
+        // with a separate config root ~/.qoder-cn, so the international entry
+        // above never reaches it. The hook contract is identical, so events are
+        // reported under the shared `qoder-cli` source (#289).
+        CLIConfig(
+            name: "Qoder CN", source: "qoder-cn",
+            configPath: ".qoder-cn/settings.json", configKey: "hooks",
+            format: .claude,
+            events: [
+                ("UserPromptSubmit", 5, true),
+                ("PreToolUse", 5, false),
+                ("PostToolUse", 5, true),
+                ("PostToolUseFailure", 5, true),
+                ("PermissionRequest", 86400, false),
+                ("Stop", 5, true),
+                ("SubagentStart", 5, true),
+                ("SubagentStop", 5, true),
+                ("SessionStart", 5, false),
+                ("SessionEnd", 5, true),
+                ("Notification", 86400, false),
+                ("PreCompact", 5, true),
+            ],
+            bridgeSourceOverride: "qoder-cli"
+        ),
         // QoderWork — Qoder's standalone desktop assistant app (not the IDE).
         // Claude-format hooks, but user-level ~/.qoderwork/settings.json ONLY
         // (no project-level config) and no hot reload: the user must restart
@@ -1523,14 +1547,19 @@ struct ConfigInstaller {
                 // configKey ("codeisland"), keyed here by installExternalHooks, so we
                 // emit only the inner {matcher?, hooks:[{type,command,timeout}]} value.
                 // stdin lacks hook_event_name -> the command must carry --event.
-                // `matcher` is meaningful ONLY for PreToolUse/PostToolUse (regex over
-                // the tool name, "*" = all); it's ignored for Stop, so we omit it there.
+                //
+                // The two event families take DIFFERENT shapes, and getting this
+                // wrong is silent — Antigravity just never runs the handler:
+                //   tool events  (PreToolUse/PostToolUse) → [{matcher, hooks:[…]}]
+                //   model events (PreInvocation/PostInvocation/Stop) → [{type, command}]
+                // We previously wrapped Stop in a `hooks` array too, so Stop never
+                // fired and every Antigravity session sat on "thinking" forever (#297).
                 let agyCommand = "\(baseCommand) --event \(event)"
-                let hookList: [[String: Any]] = [["type": "command", "command": agyCommand, "timeout": timeout]]
+                let handler: [String: Any] = ["type": "command", "command": agyCommand, "timeout": timeout]
                 if event == "PreToolUse" || event == "PostToolUse" {
-                    entry = ["matcher": "*", "hooks": hookList]
+                    entry = ["matcher": "*", "hooks": [handler]]
                 } else {
-                    entry = ["hooks": hookList]
+                    entry = handler
                 }
             case .cline, .none:
                 // Handled at the top of installExternalHooks; never reaches here
@@ -2761,7 +2790,26 @@ struct ConfigInstaller {
         guard allPresent else { return false }
         // Also check for stale "async" keys that need cleanup
         if hasStaleAsyncKey(hooks) { return false }
+        // Pre-#297 installs wrapped Antigravity's model events in a `hooks` array,
+        // a shape Antigravity silently ignores. Report those as not-installed so
+        // verifyAndRepair rewrites them into the flat handler form.
+        if cli.format == .antigravityNamed, hasNestedAntigravityModelEvent(hooks) { return false }
         return true
+    }
+
+    /// Antigravity's `PreInvocation` / `PostInvocation` / `Stop` handlers are a
+    /// direct `[{type, command}]` list; only `PreToolUse` / `PostToolUse` take the
+    /// `[{matcher, hooks: […]}]` wrapper. A CodeIsland entry for a model event
+    /// carrying a `hooks` array is the broken legacy shape. (#297)
+    static func hasNestedAntigravityModelEvent(_ hooks: [String: Any]) -> Bool {
+        let modelEvents = ["Stop", "PreInvocation", "PostInvocation"]
+        for event in modelEvents {
+            guard let entries = hooks[event] as? [[String: Any]] else { continue }
+            if entries.contains(where: { containsOurHook($0) && $0["hooks"] != nil }) {
+                return true
+            }
+        }
+        return false
     }
 
     /// #182: tell apart a user who intentionally kept only some hook events
@@ -2782,6 +2830,9 @@ struct ConfigInstaller {
         if cli.format == .kimi { return false }
         guard let root = parseJSONFile(at: cli.fullPath, fm: fm),
               let hooks = root[cli.configKey] as? [String: Any] else { return false }
+        // A legacy-shaped Antigravity model event is broken, not "intentionally
+        // pruned by the user" — it must be rewritten, not preserved. (#297)
+        if cli.format == .antigravityNamed, hasNestedAntigravityModelEvent(hooks) { return false }
         return shouldPreservePartialHooks(hooks: hooks, events: cli.events)
     }
 

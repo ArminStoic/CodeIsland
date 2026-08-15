@@ -253,6 +253,13 @@ public struct SessionSnapshot: Sendable {
             "cursoragent": "cursor-cli",
             "cursorcli": "cursor-cli",
             "qodercli": "qoder-cli",
+            // Qoder 国行 (China build): a separate `qoderclicn` binary rooted at
+            // ~/.qoder-cn, but the same Claude-format hook contract as the
+            // international CLI — so it shares the qoder-cli source (#289).
+            "qoderclicn": "qoder-cli",
+            "qodercli-cn": "qoder-cli",
+            "qoder-cn": "qoder-cli",
+            "qodercn": "qoder-cli",
             // QoderWork — Qoder's standalone desktop assistant app (not the
             // IDE); own hooks file at ~/.qoderwork/settings.json (#249).
             "qoder-work": "qoderwork",
@@ -374,7 +381,7 @@ public struct SessionSnapshot: Sendable {
     /// exact dot-dirs are peeled / treated as unhelpful — legitimate dot-named
     /// repos (.dotfiles, .config, .emacs.d) must keep their own name.
     static let agentMetadataDirNames: Set<String> = [
-        ".claude", ".cursor", ".codex", ".gemini", ".qoder", ".qoderwork",
+        ".claude", ".cursor", ".codex", ".gemini", ".qoder", ".qoder-cn", ".qoderwork",
         ".trae", ".trae-cn", ".kiro", ".copilot", ".factory", ".codebuddy",
         ".codybuddycn", ".stepfun", ".workbuddy", ".hermes", ".kimi", ".kimi-code",
         ".grok", ".pi", ".omp", ".qwen", ".zcode", ".openclaw", ".codeisland",
@@ -1233,6 +1240,22 @@ public func reduceEvent(
         }
         if QuestionPayload.from(event: event) != nil {
             sessions[sessionId]?.status = .waitingQuestion
+        } else {
+            // Notifications that describe what the agent is waiting for. A
+            // Notification cannot block (it is observe-only), so this is a
+            // display-only wait: the decision is made in the terminal, and the
+            // next PostToolUse/Stop clears it via the existing wasWaiting drain.
+            // Without this the card sat on "thinking" while the CLI was in fact
+            // blocked on the user (#290).
+            switch notificationKind(from: event) {
+            case "permission_prompt":
+                sessions[sessionId]?.status = .waitingApproval
+            case "idle_prompt":
+                // "Waiting for your input after 60s idle" — the turn is over.
+                sessions[sessionId]?.status = .idle
+            default:
+                break
+            }
         }
     case "PreCompact":
         sessions[sessionId]?.status = .processing
@@ -1587,6 +1610,19 @@ private func firstStringFromDict(_ dict: [String: Any], keys: [String]) -> Strin
         }
     }
     return nil
+}
+
+/// Lowercased `notification_type` for a Notification event, if it carries one.
+/// CodeBuddy documents `permission_prompt` / `idle_prompt` / `auth_success`;
+/// other CLIs either omit the field or use the same spellings. (#290)
+public func notificationKind(from event: HookEvent) -> String? {
+    guard let raw = firstStringFromEvent(
+        event,
+        keys: ["notification_type", "notificationType"],
+        includeNested: true
+    ) else { return nil }
+    let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).lowercased()
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 private func firstStringFromEvent(_ event: HookEvent, keys: [String], includeNested: Bool) -> String? {

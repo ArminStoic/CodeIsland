@@ -36,10 +36,19 @@ public enum CLIProcessResolver {
             // and is also referenced by /cursor-agent/index.js when invoked via Node.
             return lowercasedPath.contains("/cursor-agent")
         case "qoder-cli":
-            // npm @qoder-ai/qodercli installs as `qodercli` in PATH (Homebrew/npm-global)
+            // npm @qoder-ai/qodercli installs as `qodercli` in PATH (Homebrew/npm-global).
+            // The China build ships as a SEPARATE binary named `qoderclicn`, rooted at
+            // ~/.qoder-cn instead of ~/.qoder, and its managed install execs a versioned
+            // file (`qoderclicn-1.1.5`) rather than a bare name — so match the prefix,
+            // not just the exact basename (#289).
+            let basename = (lowercasedPath as NSString).lastPathComponent
             return lowercasedPath.hasSuffix("/qodercli")
                 || lowercasedPath.contains("/qodercli ")
                 || lowercasedPath.contains("/@qoder-ai/qodercli")
+                || basename == "qoderclicn"
+                || basename.hasPrefix("qoderclicn-")
+                || lowercasedPath.contains("/qoderclicn/")
+                || lowercasedPath.contains("/.qoder-cn/")
         case "google-antigravity":
             return lowercasedPath.hasSuffix("/agy")
                 || lowercasedPath.contains("/agy ")
