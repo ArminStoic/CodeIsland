@@ -52,6 +52,13 @@ public enum EventNormalizer {
         case "pre_tool_call":         return "PreToolUse"
         case "post_tool_call":        return "PostToolUse"
         case "pre_llm_call":          return "UserPromptSubmit"
+        // Hermes has no per-turn terminal event — `on_session_end` only fires on
+        // /reset or an explicit close, and the backend is a long-lived daemon, so
+        // process exit never settles the card either (#303). `post_llm_call` is
+        // the only per-turn signal, but it fires after EVERY model response,
+        // including mid-turn ones that go on to call tools, so it cannot mean
+        // "done" by itself — hence its own name rather than Stop.
+        case "post_llm_call":         return "AgentTurnSettled"
         case "on_session_start":      return "SessionStart"
         case "on_session_end":        return "SessionEnd"
         case "on_session_reset":      return "SessionEnd"

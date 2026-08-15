@@ -128,6 +128,15 @@ public struct SessionSnapshot: Sendable {
     public var weztermPaneId: String?   // WezTerm / Kaku pane id (numeric string) from WEZTERM_PANE env var
     public var supersetWorkspaceId: String? // Superset workspace UUID (from SUPERSET_WORKSPACE_ID env var); presence means running inside Superset
     public var supersetPaneId: String?  // Superset pane/terminal id (from SUPERSET_PANE_ID / SUPERSET_TERMINAL_ID env var)
+    /// Orca terminal handle (ORCA_TERMINAL_HANDLE) — the argument `orca terminal
+    /// switch --terminal` takes, which is the only way to reach one specific
+    /// worktree tab among several open for the same repo (#302).
+    public var orcaTerminalHandle: String?
+    /// Orca worktree id (ORCA_WORKTREE_ID). Presence alone identifies an Orca
+    /// terminal even when Orca has stripped TERM_PROGRAM (it does that for
+    /// Claude Agent Teams sessions), which is what used to send click-to-jump
+    /// to a blank Terminal.app window.
+    public var orcaWorktreeId: String?
     public var cliPid: pid_t?            // CLI process PID (from bridge _ppid)
     public var cliStartTime: Date?       // Start time of the tracked CLI PID (guards PID reuse)
     public var source: String = "claude" // "claude" or "codex"
@@ -641,7 +650,13 @@ public struct SessionSnapshot: Sendable {
     /// True when the session runs inside an IDE's integrated terminal.
     /// We can't query IDE tab/pane state, so notification suppression should be skipped.
     public var isIDETerminal: Bool {
-        guard let bid = termBundleId else { return false }
+        guard let bid = termBundleId else {
+            // Zed rebuilds the environment it gives its integrated terminal, so
+            // no __CFBundleIdentifier reaches the hook — TERM_PROGRAM is the only
+            // signal left, and without this the session reads as a plain terminal
+            // whose tab visibility we would wrongly claim to know (#307).
+            return termApp?.lowercased() == "zed"
+        }
         if isNativeAppMode { return false }
         // Known apps used as terminal (e.g., Claude CLI in Cursor's integrated terminal)
         if Self.appBundleNames[bid] != nil { return true }
@@ -781,6 +796,9 @@ public struct SessionSnapshot: Sendable {
         // way to label it correctly is its own SUPERSET_* env vars. Check before the TERM_PROGRAM
         // fallback below, otherwise it would mislabel as "Kitty". (#213)
         if supersetWorkspaceId != nil || supersetPaneId != nil { return "Superset" }
+        // Orca strips TERM_PROGRAM for Claude Agent Teams sessions, so its own
+        // ORCA_* vars are the only label that survives every launch path (#302).
+        if orcaTerminalHandle != nil || orcaWorktreeId != nil { return "Orca" }
         // Fallback to TERM_PROGRAM
         guard let app = termApp else { return nil }
         let lower = app.lowercased()
@@ -1057,6 +1075,25 @@ public func reduceEvent(
                 effects.append(.enqueueCompletion(sessionId: sessionId))
             }
         } else {
+            sessions[sessionId]?.status = .processing
+        }
+    case "AgentTurnSettled":
+        // A model response just completed. Drop the tool chrome and record the
+        // reply, but do NOT enqueue a completion — a mid-turn response is
+        // followed within a second or two by the next pre_tool_call, which puts
+        // the card straight back to running. What settles the card is the idle
+        // sweep's daemon-source timeout, which only fires when nothing follows.
+        sessions[sessionId]?.currentTool = nil
+        sessions[sessionId]?.toolDescription = nil
+        if let msg = firstStringFromEvent(
+            event,
+            keys: ["assistant_response", "last_assistant_message", "text", "message"],
+            includeNested: true
+        ), !msg.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+            sessions[sessionId]?.lastAssistantMessage = msg
+            sessions[sessionId]?.addRecentMessage(ChatMessage(isUser: false, text: msg))
+        }
+        if !isWaiting {
             sessions[sessionId]?.status = .processing
         }
     case "TaskRoundComplete":
@@ -1345,6 +1382,14 @@ private func applyEnvMetadata(into sessions: inout [String: SessionSnapshot], se
        let pane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !pane.isEmpty {
         sessions[sessionId]?.supersetPaneId = pane
     }
+    if sessions[sessionId]?.orcaTerminalHandle == nil,
+       let handle = env["ORCA_TERMINAL_HANDLE"], !handle.isEmpty {
+        sessions[sessionId]?.orcaTerminalHandle = handle
+    }
+    if sessions[sessionId]?.orcaWorktreeId == nil,
+       let worktree = env["ORCA_WORKTREE_ID"], !worktree.isEmpty {
+        sessions[sessionId]?.orcaWorktreeId = worktree
+    }
 }
 
 /// Fill identity fields on a parent card from a merged Task/subagent hook.
@@ -1540,6 +1585,16 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     if let supersetPane = event.rawJSON["_superset_pane_id"] as? String, !supersetPane.isEmpty {
         sessions[sessionId]?.supersetPaneId = supersetPane
     }
+    // Orca terminal handle / worktree (injected by bridge from ORCA_* env vars).
+    // Presence routes activation to com.stablyai.orca and drives a per-terminal
+    // `orca terminal switch`, which is what makes several worktrees of one repo
+    // distinguishable (#302).
+    if let orcaHandle = event.rawJSON["_orca_terminal_handle"] as? String, !orcaHandle.isEmpty {
+        sessions[sessionId]?.orcaTerminalHandle = orcaHandle
+    }
+    if let orcaWorktree = event.rawJSON["_orca_worktree_id"] as? String, !orcaWorktree.isEmpty {
+        sessions[sessionId]?.orcaWorktreeId = orcaWorktree
+    }
     if let remoteHostId = event.rawJSON["_remote_host_id"] as? String, !remoteHostId.isEmpty {
         sessions[sessionId]?.remoteHostId = remoteHostId
     }
@@ -1630,7 +1685,9 @@ private func firstStringFromEvent(_ event: HookEvent, keys: [String], includeNes
         return value
     }
     if includeNested {
-        for containerKey in ["payload", "data"] {
+        // "extra" is Hermes's envelope for everything beyond the four common
+        // hook fields — assistant_response and friends live there (#303).
+        for containerKey in ["payload", "data", "extra"] {
             if let nested = event.rawJSON[containerKey] as? [String: Any],
                let value = firstStringFromDict(nested, keys: keys) {
                 return value

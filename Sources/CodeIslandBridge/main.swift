@@ -551,6 +551,20 @@ if let supersetPane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !s
     json["_superset_pane_id"] = supersetPane
 }
 
+// Orca (Electron ADE that runs each task in its own git worktree + terminal).
+// TERM_PROGRAM is normally "Orca", but Orca deletes it for Claude Agent Teams
+// sessions — with no __CFBundleIdentifier in the PTY env either, click-to-jump
+// then fell all the way through to `bringToFront("Terminal")` and opened a blank
+// Terminal.app window. ORCA_TERMINAL_HANDLE is also the handle
+// `orca terminal switch --terminal` takes, which is the only way to tell two
+// worktrees of the same repo apart. (#302)
+if let orcaHandle = env["ORCA_TERMINAL_HANDLE"], !orcaHandle.isEmpty {
+    json["_orca_terminal_handle"] = orcaHandle
+}
+if let orcaWorktree = env["ORCA_WORKTREE_ID"], !orcaWorktree.isEmpty {
+    json["_orca_worktree_id"] = orcaWorktree
+}
+
 // Inject cwd if not already present. Gemini CLI / Google Antigravity hooks do not
 // include a `cwd` field, so CodeIsland cannot resolve the project name and falls back
 // to "Session". Populating it here lets the approval card show the actual folder name.

@@ -317,6 +317,23 @@ final class AppState {
         }
     }
 
+    /// Agents whose tracked process is a long-lived daemon rather than a
+    /// per-turn CLI. For these, neither process exit nor SessionEnd marks the
+    /// end of a reply, so a card that has gone quiet with no tool in flight is
+    /// the only evidence the turn is over. (#303)
+    nonisolated static let daemonBackedSources: Set<String> = ["hermes"]
+
+    /// How long a daemon-backed session may sit on bare "thinking" with no tool
+    /// and no new events before it settles. Long enough that a mid-turn
+    /// `post_llm_call` (followed within a second or two by the next
+    /// `pre_tool_call`) never flickers the card to idle.
+    nonisolated static let daemonTurnSettleTimeout: TimeInterval = 20
+
+    nonisolated static func isDaemonBackedSource(_ source: String?) -> Bool {
+        guard let normalized = SessionSnapshot.normalizedSupportedSource(source) else { return false }
+        return daemonBackedSources.contains(normalized)
+    }
+
     private func cleanupIdleSessions() {
         // 1. Verify monitored PIDs are still alive (DispatchSource can silently miss exits)
         //    Also kill orphaned processes (ppid <= 1, terminal closed but process survived).
@@ -387,11 +404,20 @@ final class AppState {
         let nativeAppThinkingTimeout: TimeInterval = 30
         let codexTerminalTurnSettleTime: TimeInterval = 3
         for (key, session) in sessions
-            where processMonitors[key] != nil
-            && session.status == .processing
+            where session.status == .processing
             && session.currentTool == nil
             && session.toolDescription == nil {
             let elapsed = -session.lastActivity.timeIntervalSinceNow
+            // Daemon-backed agents settle on a short timeout whether or not we
+            // hold a process monitor: their backend never exits, so a live PID
+            // says nothing about whether the turn is over (#303).
+            if Self.isDaemonBackedSource(session.source) {
+                if elapsed > Self.daemonTurnSettleTimeout {
+                    sessions[key]?.status = .idle
+                }
+                continue
+            }
+            guard processMonitors[key] != nil else { continue }
             if session.isNativeAppMode,
                elapsed >= codexTerminalTurnSettleTime,
                let finishedAt = Self.nativeAppFinishedTurnTimestamp(sessionId: key, session: session),
