@@ -455,16 +455,36 @@ final class AppState {
         //     running should be cleaned up — these apps can't send SessionEnd when force-quit.
         //     Don't check PID liveness here: the dedup in integrateDiscovered may have
         //     reattached a CLI PID to the old native app session, keeping it alive incorrectly.
-        let runningBundleIds = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        for (key, session) in sessions {
-            guard session.isNativeAppMode,
-                  let bundleId = session.termBundleId,
-                  !runningBundleIds.contains(bundleId) else { continue }
-            removeSession(key)
+        // `NSWorkspace.runningApplications` is not a cheap array read: touching
+        // `bundleIdentifier` on each entry goes out to LaunchServices over XPC,
+        // and this timer fires every 3 seconds forever. Only two things below
+        // need it, and on an idle Mac neither does — so build it lazily and, in
+        // the common case, never at all (#299).
+        var cachedRunningBundleIds: Set<String>?
+        func runningBundleIds() -> Set<String> {
+            if let cachedRunningBundleIds { return cachedRunningBundleIds }
+            let ids = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+            cachedRunningBundleIds = ids
+            return ids
+        }
+
+        if sessions.values.contains(where: { $0.isNativeAppMode }) {
+            let running = runningBundleIds()
+            for (key, session) in sessions {
+                guard session.isNativeAppMode,
+                      let bundleId = session.termBundleId,
+                      !running.contains(bundleId) else { continue }
+                removeSession(key)
+            }
         }
         let discoveryPollNow = Date()
-        if Self.shouldPollCodexDesktopDiscovery(
-            runningBundleIdentifiers: runningBundleIds,
+        // Check the cheap clock predicate before the expensive app list: the poll
+        // is rate-limited to every 6s, so five of every six ticks can skip it.
+        let codexPollIntervalElapsed = lastCodexDesktopDiscoveryPollAt.map {
+            discoveryPollNow.timeIntervalSince($0) >= 6
+        } ?? true
+        if codexPollIntervalElapsed, Self.shouldPollCodexDesktopDiscovery(
+            runningBundleIdentifiers: runningBundleIds(),
             lastPollAt: lastCodexDesktopDiscoveryPollAt,
             now: discoveryPollNow
         ) {

@@ -32,6 +32,14 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    /// Latest requested value awaiting its deferred apply, or nil when nothing
+    /// is queued. Coalescing matters: SwiftUI sets these several times per
+    /// animation frame, and the mascot drives frames continuously, so one
+    /// `DispatchQueue.main.async` per *set* was a permanent stream of closure
+    /// allocations and main-queue wakeups on an otherwise idle Mac (#299).
+    private var pendingConstraintsValue: Bool?
+    private var pendingLayoutValue: Bool?
+
     /// Always defer `needsUpdateConstraints = true` to the next run-loop turn.
     /// During AppKit's display-cycle (constraint-update or layout phases),
     /// calling setNeedsUpdateConstraints synchronously re-enters
@@ -44,8 +52,15 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
                 super.needsUpdateConstraints = newValue
                 return
             }
+            // Nothing queued and already in the requested state — no-op.
+            if pendingConstraintsValue == nil, super.needsUpdateConstraints == newValue { return }
+            let alreadyScheduled = pendingConstraintsValue != nil
+            pendingConstraintsValue = newValue
+            guard !alreadyScheduled else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.applySuperNeedsUpdateConstraints(newValue)
+                guard let self, let value = self.pendingConstraintsValue else { return }
+                self.pendingConstraintsValue = nil
+                self.applySuperNeedsUpdateConstraints(value)
             }
         }
     }
@@ -63,8 +78,14 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
                 super.needsLayout = newValue
                 return
             }
+            if pendingLayoutValue == nil, super.needsLayout == newValue { return }
+            let alreadyScheduled = pendingLayoutValue != nil
+            pendingLayoutValue = newValue
+            guard !alreadyScheduled else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.applySuperNeedsLayout(newValue)
+                guard let self, let value = self.pendingLayoutValue else { return }
+                self.pendingLayoutValue = nil
+                self.applySuperNeedsLayout(value)
             }
         }
     }
@@ -147,7 +168,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     private var visibilityTimer: Timer?
     private var autoScreenPoller: Timer?
     private var fullscreenPoller: Timer?
-    private var sessionObservationTask: Task<Void, Never>?
+    private var isSessionObservationArmed = false
     private var fullscreenLatch = false
     private var settingsObservers: [NSObjectProtocol] = []
     private var globalClickMonitor: Any?
@@ -164,6 +185,34 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     init(appState: AppState) {
         self.appState = appState
         super.init()
+    }
+
+    /// Watch `sessions` / `surface` for changes that affect panel visibility.
+    ///
+    /// `withObservationTracking` is one-shot, so it has to be re-armed. Doing
+    /// that from a 500 ms polling loop meant a permanent timer wakeup on a Mac
+    /// where nothing was happening (#299) — and it bought nothing, because the
+    /// loop never *detected* anything: `onChange` already fires the instant a
+    /// tracked property is written. Re-arm from `onChange` instead, so an idle
+    /// app schedules no work at all.
+    ///
+    /// Re-arming happens in the same main-actor turn as `updateVisibility()`,
+    /// with no await between them, so no mutation can slip through the window
+    /// where tracking is momentarily disarmed.
+    private func armSessionObservation() {
+        guard !isSessionObservationArmed else { return }
+        isSessionObservationArmed = true
+        withObservationTracking {
+            _ = appState.sessions
+            _ = appState.surface
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSessionObservationArmed = false
+                self.updateVisibility()
+                self.armSessionObservation()
+            }
+        }
     }
 
     func showPanel() {
@@ -254,17 +303,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
 
         // Observe session changes via @Observable tracking
-        sessionObservationTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                withObservationTracking {
-                    _ = self?.appState.sessions
-                    _ = self?.appState.surface
-                } onChange: {
-                    Task { @MainActor in self?.updateVisibility() }
-                }
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
+        armSessionObservation()
 
         // Observe settings changes (display choice, panel height)
         observeSettingsChanges()
@@ -593,6 +632,16 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
         MascotAnimationGate.shared.setPanelVisible(true)
+        MascotAnimationGate.shared.setIdleSettled(isIslandSettled())
+    }
+
+    /// Collapsed island with nothing running — the state a Mac spends most of
+    /// its day in, and the one where a live mascot timeline costs real CPU for
+    /// motion nobody is looking at (#299). Any expanded surface, or any session
+    /// that is not idle, keeps the mascot animating.
+    private func isIslandSettled() -> Bool {
+        guard !appState.surface.isExpanded else { return false }
+        return appState.sessions.values.allSatisfy { $0.status == .idle }
     }
 
     private func isActiveSpaceFullscreen() -> Bool {
