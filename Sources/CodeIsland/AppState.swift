@@ -1753,32 +1753,47 @@ final class AppState {
         return (try? JSONSerialization.data(withJSONObject: obj)) ?? plainAllow
     }
 
-    func handleBuddyControlCommand(_ command: BuddyControlCommand) {
+    /// `expectedSessionId` is the session the remote surface was showing when
+    /// the button was pressed. The hardware Buddy has no session identity to
+    /// send and passes nil, keeping its head-of-queue behaviour; the iPhone
+    /// does send one, so a tap resolves against the card the user actually saw
+    /// — the #308 failure mode, which the panel fixed in #310 but this path
+    /// never did. A round trip over Bluetooth makes the race wider here than
+    /// it ever was on the panel.
+    func handleBuddyControlCommand(_ command: BuddyControlCommand, expectedSessionId: String? = nil) {
         switch command {
         case .approveCurrentPermission:
             if !permissionQueue.isEmpty {
-                approvePermission()
+                approvePermission(expectedSessionId: expectedSessionId)
             } else {
                 log.info("Ignored Buddy approve command because permission queue is empty")
             }
         case .denyCurrentPermission:
             if !permissionQueue.isEmpty {
-                denyPermission()
+                denyPermission(expectedSessionId: expectedSessionId)
             } else {
                 log.info("Ignored Buddy deny command because permission queue is empty")
             }
         case .skipCurrentQuestion:
             if !questionQueue.isEmpty {
-                skipQuestion()
+                skipQuestion(expectedSessionId: expectedSessionId)
             } else {
                 log.info("Ignored Buddy skip command because question queue is empty")
             }
         }
     }
 
-    func answerCompanionQuestion(_ answer: String) {
+    /// See `handleBuddyControlCommand` for why `expectedSessionId` matters.
+    func answerCompanionQuestion(_ answer: String, expectedSessionId: String? = nil) {
         guard !questionQueue.isEmpty else {
             log.info("Ignored companion question answer because question queue is empty")
+            return
+        }
+        if let expectedSessionId,
+           questionQueue.first?.event.sessionId ?? "default" != expectedSessionId {
+            // The card the phone was showing is no longer at the head. Route by
+            // identity rather than answering a question the user never read.
+            answerQuestion(answer, expectedSessionId: expectedSessionId)
             return
         }
 
