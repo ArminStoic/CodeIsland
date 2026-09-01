@@ -580,6 +580,139 @@ final class AppStatePermissionFlowTests: XCTestCase {
         XCTAssertFalse(CodexPermissionRules.configDeclaresMCPServerTransport(contents, serverID: "absent"))
     }
 
+    /// #316 — a hyphenated MCP server reaches us as `mcp__davinci_resolve__…`,
+    /// because `__` is the tool-name separator. Writing that namespace verbatim
+    /// created a second, transport-less table and Codex then refused to load the
+    /// whole config; the approval must land under the declared key instead.
+    func testCodexAlwaysAllowWritesUnderTheDeclaredHyphenatedServerKey() throws {
+        let codexHome = makeTemporaryCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+        let configURL = try writeCodexConfig(
+            """
+            [mcp_servers.davinci-resolve]
+            command = "/opt/venv/bin/python"
+
+            """,
+            in: codexHome
+        )
+
+        let event = try makePermissionRequestEvent(
+            sessionId: "s-codex-mcp-hyphen",
+            toolName: "mcp__davinci_resolve__project_manager",
+            source: "codex"
+        )
+
+        XCTAssertTrue(CodexPermissionRules().persistAlwaysAllowRule(for: event))
+
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("[mcp_servers.davinci-resolve.tools.project_manager]"))
+        XCTAssertFalse(contents.contains("[mcp_servers.davinci_resolve"),
+                       "the underscore namespace must never become its own table")
+    }
+
+    func testDeclaredMCPServerIDPrefersAnExactMatchOverASanitisedOne() {
+        let contents = """
+        [mcp_servers.davinci_resolve]
+        command = "exact"
+
+        [mcp_servers.davinci-resolve]
+        command = "hyphenated"
+        """
+
+        XCTAssertEqual(
+            CodexPermissionRules.declaredMCPServerID(in: contents, forToolNamespace: "davinci_resolve"),
+            "davinci_resolve"
+        )
+    }
+
+    /// Two declared servers can sanitise to the same namespace. Guessing which
+    /// one the user meant would grant a standing approval on the wrong server,
+    /// so nothing is persisted and the call is approved for this session only.
+    func testDeclaredMCPServerIDRefusesToGuessBetweenAmbiguousServers() {
+        let contents = """
+        [mcp_servers.davinci-resolve]
+        command = "one"
+
+        [mcp_servers."davinci resolve"]
+        command = "two"
+        """
+
+        XCTAssertNil(CodexPermissionRules.declaredMCPServerID(in: contents, forToolNamespace: "davinci_resolve"))
+    }
+
+    func testDeclaredMCPServerIDIgnoresTransportlessTables() {
+        let contents = """
+        [mcp_servers.codex_app.tools.send_message_to_thread]
+        approval_mode = "approve"
+        """
+
+        XCTAssertNil(CodexPermissionRules.declaredMCPServerID(in: contents, forToolNamespace: "codex_app"))
+        XCTAssertEqual(CodexPermissionRules.declaredMCPServerIDs(in: contents), [])
+    }
+
+    // MARK: - #316 repair of already-broken configs
+
+    func testRepairRepointsAnOrphanedApprovalAtTheDeclaredServer() throws {
+        let contents = """
+        [mcp_servers.davinci-resolve]
+        command = "/opt/venv/bin/python"
+
+        \(CodexPermissionRules.mcpToolApprovalComment)
+        [mcp_servers.davinci_resolve.tools.project_manager]
+        approval_mode = "approve"
+        """
+
+        let repaired = try XCTUnwrap(CodexPermissionRules.repairingOrphanedMCPToolTables(contents))
+        XCTAssertTrue(repaired.contains("[mcp_servers.davinci-resolve.tools.project_manager]"))
+        XCTAssertFalse(repaired.contains("[mcp_servers.davinci_resolve"))
+        XCTAssertTrue(repaired.contains(#"approval_mode = "approve""#),
+                      "re-pointing must keep the approval the user actually granted")
+        XCTAssertTrue(repaired.contains(#"command = "/opt/venv/bin/python""#))
+    }
+
+    func testRepairDropsAnApprovalWithNoServerToRepointAt() throws {
+        let contents = """
+        [mcp_servers.github]
+        command = "github-mcp-server"
+
+        \(CodexPermissionRules.mcpToolApprovalComment)
+        [mcp_servers.codex_app.tools.send_message_to_thread]
+        approval_mode = "approve"
+        """
+
+        let repaired = try XCTUnwrap(CodexPermissionRules.repairingOrphanedMCPToolTables(contents))
+        XCTAssertFalse(repaired.contains("codex_app"))
+        XCTAssertFalse(repaired.contains(CodexPermissionRules.mcpToolApprovalComment),
+                       "the stamp must go with the table it introduced")
+        XCTAssertTrue(repaired.contains("[mcp_servers.github]"))
+        XCTAssertTrue(repaired.contains(#"command = "github-mcp-server""#))
+    }
+
+    /// An approval the user typed themselves is theirs, however it is spelled.
+    func testRepairLeavesUnstampedTablesAlone() {
+        let contents = """
+        [mcp_servers.codex_app.tools.send_message_to_thread]
+        approval_mode = "approve"
+        """
+
+        XCTAssertNil(CodexPermissionRules.repairingOrphanedMCPToolTables(contents))
+    }
+
+    func testRepairLeavesAHealthyConfigUntouched() {
+        let contents = """
+        [mcp_servers.github]
+        command = "github-mcp-server"
+
+        \(CodexPermissionRules.mcpToolApprovalComment)
+        [mcp_servers.github.tools.get_me]
+        approval_mode = "approve"
+
+        """
+
+        XCTAssertNil(CodexPermissionRules.repairingOrphanedMCPToolTables(contents),
+                     "a healthy file must never be rewritten")
+    }
+
     func testCodexAutoReviewConfigDefersPermissionRequestToCodex() throws {
         let codexHome = makeTemporaryCodexHome()
         defer { try? FileManager.default.removeItem(at: codexHome) }

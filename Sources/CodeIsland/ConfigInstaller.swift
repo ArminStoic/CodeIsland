@@ -959,6 +959,7 @@ struct ConfigInstaller {
         if isEnabled(source: "codex"),
            fm.fileExists(atPath: codexHome()) {
             enableCodexHooksConfig(fm: fm)
+            repairCodexMCPApprovalTables(fm: fm)
         }
 
         // Install OpenCode plugin
@@ -2467,6 +2468,22 @@ struct ConfigInstaller {
     }
 
     // MARK: - Codex config.toml
+
+    /// Clears out the transport-less `[mcp_servers.*.tools.*]` tables an older
+    /// CodeIsland could write, which make Codex reject the whole config.toml
+    /// (#316). Runs at launch because the user has no reason to connect their
+    /// broken Codex to an "Always Allow" they clicked days earlier — and the
+    /// symptom (unrelated settings refusing to save) never points here.
+    @discardableResult
+    static func repairCodexMCPApprovalTables(fm: FileManager) -> Bool {
+        let configPath = codexHome() + "/config.toml"
+        guard fm.fileExists(atPath: configPath),
+              let contents = try? String(contentsOfFile: configPath, encoding: .utf8),
+              let repaired = CodexPermissionRules.repairingOrphanedMCPToolTables(contents) else {
+            return false
+        }
+        return (try? repaired.write(toFile: configPath, atomically: true, encoding: .utf8)) != nil
+    }
 
     /// Ensure hooks = true under [features] in $CODEX_HOME/config.toml
     /// (or ~/.codex/config.toml when unset) so Codex actually fires hook events.
