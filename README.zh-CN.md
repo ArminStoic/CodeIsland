@@ -87,6 +87,14 @@ iPhone App 可以把 Mac 上的会话状态同步到灵动岛、锁屏、StandBy
 
 Code Island Buddy 完全免费，并且开源。它不需要账号，也不依赖外部服务器；伴随端源码就在本仓库的 `ios/CodeIslandCompanion` 和 `apple-companion` 目录中。
 
+**开始使用：** Mac 端打开 **设置 → Buddy → iPhone Buddy**，勾选「允许 iPhone Buddy 发现这台 Mac」。同一 Wi-Fi 下打开手机 App 即可配对，配对成功后 Mac 端这里会显示已连接的设备名。首次连接时 macOS 会请求本地网络与蓝牙权限，两个都要允许——本地网络负责前台的完整快照，蓝牙负责 App 退到后台后刷新实时活动和手表状态。同一区块的「同步间隔」控制推送频率。
+
+### 硬件桌宠 Buddy（ESP32）
+
+除了手机端，CodeIsland 还支持一颗放在桌上的 ESP32 小屏幕，通过 BLE 实时播放当前 Agent 状态对应的像素动画（空闲睡觉 / 敲代码 / 等审批 / 等回答）。
+
+完整的硬件清单、固件烧录和配对步骤见 **[hardware/README.md](hardware/README.md)**（中文，含开发板型号与购买参考）。Mac 端的开关在 **设置 → Buddy** 的硬件 Buddy 区块。
+
 ### 从源码构建
 
 需要 **macOS 14+** 和 **Swift 5.9+**。

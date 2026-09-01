@@ -87,6 +87,14 @@ The iPhone app mirrors your Mac sessions to Dynamic Island, Lock Screen, StandBy
 
 Code Island Buddy is completely free and open source. It does not require an account or an external server; the companion source code lives in this repository under `ios/CodeIslandCompanion` and `apple-companion`.
 
+**Getting started:** on the Mac, open **Settings → Buddy → iPhone Buddy** and turn on *Allow iPhone Buddy to discover this Mac*. Open the iPhone app on the same Wi-Fi to pair; connected devices are listed right below the toggle. macOS asks for Local Network and Bluetooth permission on first connect — grant both: Local Network carries the full snapshots while the app is in front, Bluetooth carries the summaries that refresh the Live Activity and the Watch once it is backgrounded. *Sync interval* in the same section controls how often those go out.
+
+### Hardware Buddy (ESP32)
+
+Beyond the phone, CodeIsland drives a small ESP32 screen on your desk over BLE, playing the pixel mascot animation for the current agent state — asleep when idle, typing while it works, calling you when it needs an approval or an answer.
+
+Parts list, firmware flashing, and pairing steps are in **[hardware/README.md](hardware/README.md)** (written in Chinese, including the exact dev board and where to buy it). The Mac-side switch is in the hardware Buddy section of **Settings → Buddy**.
+
 ### Build from Source
 
 Requires **macOS 14+** and **Swift 5.9+**.
