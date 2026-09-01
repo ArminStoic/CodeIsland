@@ -95,7 +95,10 @@ struct TerminalVisibilityDetector {
             return isTmuxPaneActive(pane)
         }
 
-        if let identity = HerdrController.identity(from: session) {
+        // Herdr owns the pane below the outer terminal. Route on the same
+        // predicate `TerminalActivator` uses, so validation can never ask Herdr
+        // about a jump that was actually handed to tmux/zellij.
+        if HerdrController.shouldRoute(session), let identity = HerdrController.identity(from: session) {
             return HerdrController.isFocused(identity)
         }
 

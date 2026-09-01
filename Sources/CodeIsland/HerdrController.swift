@@ -16,9 +16,9 @@ enum HerdrController {
     ) -> Data?
 
     static func identity(from session: SessionSnapshot) -> HerdrRoutingIdentity? {
+        guard session.hasHerdrRoute else { return nil }
         let pane = session.herdrPaneId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let socket = session.herdrSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !pane.isEmpty, socket.hasPrefix("/") else { return nil }
         let binary = session.herdrBinaryPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HerdrRoutingIdentity(
             paneId: pane,

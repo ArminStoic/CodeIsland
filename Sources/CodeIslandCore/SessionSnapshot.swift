@@ -760,21 +760,30 @@ public struct SessionSnapshot: Sendable {
     /// Not the terminal itself: cmux is a terminal app and is already named by
     /// `terminalName`, so repeating it here would print the same word twice on
     /// one badge. Nested multiplexers each leave their env vars behind, so the
-    /// innermost layer — the one the CLI actually sits in — wins.
+    /// innermost layer — the one the CLI actually sits in — wins, which is the
+    /// same order `HerdrController.shouldRoute` uses to decide where a jump goes.
     public var multiplexerLabel: String? {
         if zellijPaneId != nil || zellijSessionName != nil { return "zellij" }
         if tmuxEnv != nil || tmuxPane != nil { return "tmux" }
+        if hasHerdrRoute { return "herdr" }
         return nil
+    }
+
+    /// Herdr routing needs both halves: a pane id aimed at the wrong server is
+    /// worse than no routing at all, so an incomplete pair is treated as absent.
+    public var hasHerdrRoute: Bool {
+        guard let pane = herdrPaneId?.trimmingCharacters(in: .whitespacesAndNewlines), !pane.isEmpty,
+              let socket = herdrSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              socket.hasPrefix("/") else {
+            return false
+        }
+        return true
     }
 
     /// Short terminal/app name for display tag
     public var terminalName: String? {
         if isRemote {
             return remoteDisplayName ?? "Remote"
-        }
-        if let pane = herdrPaneId?.trimmingCharacters(in: .whitespacesAndNewlines), !pane.isEmpty,
-           let socket = herdrSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines), socket.hasPrefix("/") {
-            return "Herdr"
         }
         // If termBundleId is a known app, show app name (APP mode)
         if let bid = termBundleId, let name = Self.appBundleNames[bid] {

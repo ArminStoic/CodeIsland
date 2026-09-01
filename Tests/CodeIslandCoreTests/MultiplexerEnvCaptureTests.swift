@@ -208,7 +208,11 @@ final class MultiplexerEnvCaptureTests: XCTestCase {
         XCTAssertEqual(sessions["sess-herdr"]?.herdrPaneId, "w2:p1")
         XCTAssertEqual(sessions["sess-herdr"]?.herdrSocketPath, "/tmp/herdr.sock")
         XCTAssertEqual(sessions["sess-herdr"]?.herdrBinaryPath, "/opt/homebrew/bin/herdr")
-        XCTAssertEqual(sessions["sess-herdr"]?.terminalName, "Herdr")
+        // Herdr nests inside a host terminal, so it reads as a multiplexer chip
+        // beside the terminal name rather than replacing it — same rule tmux and
+        // zellij follow.
+        XCTAssertEqual(sessions["sess-herdr"]?.terminalName, "Ghostty")
+        XCTAssertEqual(sessions["sess-herdr"]?.multiplexerLabel, "herdr")
     }
 
     func testNonSessionStartEventCapturesCompleteHerdrRoute() {
@@ -238,6 +242,27 @@ final class MultiplexerEnvCaptureTests: XCTestCase {
         _ = reduceEvent(sessions: &sessions, event: event, maxHistory: 100)
 
         XCTAssertEqual(sessions["sess-herdr-incomplete"]?.terminalName, "Ghostty")
+        XCTAssertNil(sessions["sess-herdr-incomplete"]?.multiplexerLabel,
+                     "half a route must not advertise Herdr routing on the badge")
+    }
+
+    /// tmux inside a Herdr pane: the CLI actually sits in tmux, and that is where
+    /// both the jump (`HerdrController.shouldRoute`) and the badge must point.
+    func testTmuxInsideHerdrReportsTmux() {
+        let event = makeEvent([
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-herdr-tmux",
+            "_term_bundle": "com.mitchellh.ghostty",
+            "_herdr_pane_id": "w1:p1",
+            "_herdr_socket_path": "/tmp/herdr.sock",
+            "_tmux_pane": "%3",
+        ])
+
+        var sessions: [String: SessionSnapshot] = [:]
+        _ = reduceEvent(sessions: &sessions, event: event, maxHistory: 100)
+
+        XCTAssertEqual(sessions["sess-herdr-tmux"]?.multiplexerLabel, "tmux")
+        XCTAssertEqual(sessions["sess-herdr-tmux"]?.terminalName, "Ghostty")
     }
 
     func testSubagentMetadataFillsMissingHerdrRouteWithoutOverwritingParent() {
